@@ -62,31 +62,45 @@ function signAndLogin() {
     };
 
     socket.onmessage = (event) => {
-        const result = JSON.parse(event.data);
-        console.log("🟡 Ответ от NCALayer:", result);
+    const result = JSON.parse(event.data);
+    console.log("🟡 Ответ от NCALayer:", result);
 
-        if (result.code !== "200" || !result.responseObject?.subjectDn) {
-            console.warn("⏳ Промежуточный или неполный ответ — игнорируем.");
-            return;
-        }
+    if (result.code !== "200" || !result.responseObject) {
+        console.warn("⏳ Промежуточный или неполный ответ — игнорируем.");
+        return;
+    }
 
-        const subjectDN = result.responseObject.subjectDn;
-        console.log("📛 subjectDN:", subjectDN);
+    const { subjectDn, certNotBefore, certNotAfter } = result.responseObject;
 
-        const iin = extractIIN(subjectDN);
-        console.log("🔑 IIN:", iin);
+    if (!subjectDn) {
+        alert("❌ Не удалось получить subjectDN из сертификата.");
+        return;
+    }
 
-        if (!iin) {
-            alert("Не удалось извлечь ИИН из subjectDN");
-            return;
-        }
+    const iin = extractIIN(subjectDn);
+    if (!iin) {
+        alert("❌ Не удалось извлечь ИИН из subjectDN.");
+        return;
+    }
 
-        sendIINToBackend(iin);
-    };
+    if (!certNotBefore || !certNotAfter) {
+        alert("❌ Сертификат не содержит даты действия (certNotBefore / certNotAfter).");
+        return;
+    }
 
-    socket.onerror = () => {
-        alert("Ошибка подключения к NCALayer. Убедитесь, что он запущен.");
-    };
+    const issued = new Date(Number(certNotBefore));
+    const expires = new Date(Number(certNotAfter));
+    const today = new Date();
+
+    console.log("📅 Дата выпуска:", issued, "Истекает:", expires, "Сегодня:", today);
+
+    if (today < issued || today > expires) {
+        alert(`⛔ Срок действия сертификата: ${issued.toLocaleDateString()} — ${expires.toLocaleDateString()}`);
+        return;
+    }
+
+    sendIINToBackend(iin);
+};
 }
 </script>
 

@@ -1,23 +1,171 @@
 {extends "base.html" %}
-{% if user.is_authenticated %}
-<h2>{{ message }}</h2>
+<body>
+    <h1>PDF Upload & Signing</h1>
 
-    {% if documents %}
-        <h3>All documents:</h3>
-        <ul>
-            {% for document in documents %}
-                <li><a href="{{ document.docfile.url }}">{{ document.docfile.name }}</a></li>
-            {% endfor %}
-        </ul>
-    {% else %}
-        <p>No documents yet.</p>
-    {% endif %}
-
-    <form action="{% url 'my-view' %}" method="post" enctype="multipart/form-data">
+    <form method="post" enctype="multipart/form-data">
         {% csrf_token %}
-        {{ form.non_field_errors }}
-        <p>{{ form.docfile.label_tag }} {{ form.docfile }}</p>
-        <p>{{ form.docfile.errors }}</p>
-        <input type="submit" value="Upload">
+        {{ form.as_p }}
+        <button type="submit">Upload</button>
     </form>
-    {% endif %}
+
+    <ul>
+    {% for doc in documents %}
+        <li>
+            <a href="{{ doc.docfile.url }}">{{ doc.docfile.name }}</a>
+            {% if doc.cms_file %}
+                | <a href="{{ doc.cms_file.url }}">Download .cms signature</a>
+                {% if not doc.email_sent %}
+                    <form class="send-email-form" data-docid="{{ doc.id }}">
+                        <input type="email" name="email" placeholder="Email to send .cms">
+                        <button type="submit">Send by Email</button>
+                    </form>
+                {% else %}
+                    | Sent to email
+                {% endif %}
+            {% else %}
+                <button class="sign-btn" data-docid="{{ doc.id }}" data-url="{{ doc.docfile.url }}">Sign with NCALayer</button>
+                <input type="email" placeholder="Email to send .cms" class="email-input">
+            {% endif %}
+        </li>
+    {% endfor %}
+    </ul>
+
+    <script src="https://unpkg.com/uuid@9.0.0/dist/umd/uuidv4.min.js"></script>
+    <script>
+    async function getBase64FromUrl(url) {
+        const response = await fetch(url);
+        const blob = await response.blob();
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    // --- Simple NCALayer client for demo ---
+    class NCALayerClient {
+        constructor() {
+            this.ws = null;
+            this.requestId = 1;
+            this.requests = {};
+        }
+        connect() {
+            return new Promise((resolve, reject) => {
+                if (this.ws && this.ws.readyState === 1) return resolve();
+                this.ws = new WebSocket("wss://127.0.0.1:13579/");
+                this.ws.onopen = resolve;
+                this.ws.onerror = reject;
+                this.ws.onmessage = (evt) => {
+                    const msg = JSON.parse(evt.data);
+                    if (msg.responseId && this.requests[msg.responseId]) {
+                        this.requests[msg.responseId](msg);
+                    }
+                };
+            });
+        }
+        send(request) {
+            return new Promise((resolve, reject) => {
+                const id = this.requestId++;
+                request.requestId = id;
+                this.requests[id] = resolve;
+                this.ws.send(JSON.stringify(request));
+            });
+        }
+        async createCMSSignatureFromBase64(storage, base64, keyType='SIGNATURE', attach=false) {
+            await this.connect();
+            const req = {
+                module: "kz.gov.pki.knca.commonUtils",
+                method: "createCMSSignatureFromBase64",
+                args: [storage, base64, keyType, attach]
+            };
+            const resp = await this.send(req);
+            if (resp.code === 200) return resp.responseObject;
+            else throw new Error(resp.message || "NCALayer error");
+        }
+        async getActiveTokens() {
+            await this.connect();
+            const req = {
+                module: "kz.gov.pki.knca.commonUtils",
+                method: "getActiveTokens",
+                args: []
+            };
+            const resp = await this.send(req);
+            if (resp.code === 200) return resp.responseObject;
+            else throw new Error(resp.message || "NCALayer error");
+        }
+    }
+
+    const nca = new NCALayerClient();
+
+    document.querySelectorAll(".sign-btn").forEach(btn => {
+        btn.onclick = async function() {
+            const docId = this.dataset.docid;
+            const url = this.dataset.url;
+            const emailInput = this.parentElement.querySelector('.email-input');
+            const email = emailInput ? emailInput.value : "";
+
+            // Try real connection to NCALayer!
+            try {
+                await nca.connect();
+            } catch (err) {
+                alert("NCALayer is NOT running or not available at wss://127.0.0.1:13579/. Please start NCALayer and try again.");
+                return;
+            }
+
+            try {
+                const base64 = await getBase64FromUrl(url);
+                const tokens = await nca.getActiveTokens();
+                const storage = tokens[0] || 'PKCS12';
+                const signature = await nca.createCMSSignatureFromBase64(storage, base64, 'SIGNATURE', false);
+                // POST to Django
+                const res = await fetch('/documents/sign/', {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRFToken": "{{ csrf_token }}"
+                    },
+                    body: JSON.stringify({
+                        doc_id: docId,
+                        signature: signature,
+                        email: email
+                    })
+                });
+                if (res.ok) {
+                    alert("Signed! Page will reload.");
+                    location.reload();
+                } else {
+                    alert("Failed to save signature.");
+                }
+            } catch (e) {
+                alert("Error: " + e.message);
+            }
+        };
+    });
+
+    // Handle "Send by email" forms
+    document.querySelectorAll(".send-email-form").forEach(form => {
+        form.onsubmit = async function(e) {
+            e.preventDefault();
+            const docId = this.dataset.docid;
+            const email = this.querySelector("input[name=email]").value;
+            if (!email) return alert("Enter email");
+            const res = await fetch('/documents/send_email/', {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRFToken": "{{ csrf_token }}"
+                },
+                body: JSON.stringify({ doc_id: docId, email: email })
+            });
+            if (res.ok) {
+                alert("Sent!");
+                location.reload();
+            } else {
+                alert("Send error!");
+            }
+        };
+    });
+    </script>
+</body>
+
