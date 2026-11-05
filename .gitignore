@@ -3,6 +3,7 @@ __pycache__/
 *$py.class
 
 venv/
+.env
 .env/
 .venv/
 
@@ -11,6 +12,9 @@ db.sqlite3
 media/
 staticfiles/
 debug.log
+data.json
+*.pyc 
+*.log
 
 .cache
 coverage/
@@ -26,6 +30,14 @@ coverage/
 
 node_modules/
 
+data.json
+
 *.pem
 *.crt
 *.key
+
+ALL_CODE.txt
+CLEAN_CODE.txt
+
+documents/migrations/0002_document_cms_file_document_signed_pdf.py
+

@@ -25,15 +25,18 @@ from django.conf.urls import include
 from ncalogin.views import ncalayer_login
 from ncalogin.views import login_page, ncalayer_login
 from django.contrib.auth.views import LogoutView
+from documents.views import my_view, sign_document, send_email_view
 urlpatterns = [
     path("admin/", admin.site.urls),
-    # path("", user),
+    # =path("", user),
     path("index/", index),
     path('api/ncalayer-login/', ncalayer_login, name='ncalayer_login'),
     path('login/', login_page, name='login'),
     path("logout/", views.logoutuser, name="logoutuser"),
     path('', views.home, name='home'),
     path('dashboard/', views.dashboard, name='dashboard'),
-    #path('documents/', my_view, name='my-view') """,
+    path('documents/', my_view, name='my-view') ,
+    path('sign/', sign_document, name='sign-document'),
+    path('send_email/', send_email_view, name='send-email'),
     
-]
+]+ static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
